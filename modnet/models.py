@@ -198,24 +198,18 @@ class MODNetModel:
         self.target_names = list(self.weights.keys())
         self.optimal_descriptors = training_data.get_optimal_descriptors()
 
-        x = training_data.get_featurized_df()[
-            self.optimal_descriptors[:self.n_feat]
-        ].values
-        y = [training_data.df_targets[targ].values.astype(np.float, copy=False) for targ in self.targets_flatten]
-
-        # Scale the input features:
         if self.xscale == "minmax":
             self._scaler = MinMaxScaler()
 
         elif self.xscale == "standard":
             self._scaler = StandardScaler()
 
-        x = self._scaler.fit_transform(x)
-        x = np.nan_to_num(x)
+        x = self.process_moddata_for_model(training_data, fit_scaler=True)
+
+        y = [training_data.df_targets[targ].values.astype(np.float, copy=False) for targ in self.targets_flatten]
 
         if val_data is not None:
-            val_x = val_data.get_featurized_df()[self.optimal_descriptors[:self.n_feat]].values
-            val_x = self._scaler.transform(val_x)
+            val_x = self.process_moddata_for_model(val_data, fit_scaler=False)
             val_y = list(val_data.get_target_df()[self.targets_flatten].values.transpose())
             validation_data = (val_x, val_y)
         else:
@@ -317,6 +311,7 @@ class MODNetModel:
 
         best_model = None
         best_n_feat = None
+        best_scaler = None
 
         for i, params in enumerate(presets):
             logging.info("Training preset #{}/{}".format(i + 1, len(presets)))
@@ -342,6 +337,7 @@ class MODNetModel:
             val_loss = np.array(self.model.history.history["val_loss"])[-20:].mean()
             if val_loss < min(val_losses):
                 best_model = self.model
+                best_scaler = self._scaler
                 best_n_feat = n_feat
 
             val_losses[i] = val_loss
@@ -355,7 +351,19 @@ class MODNetModel:
             )
         )
         self.n_feat = best_n_feat
+        self._scaler = best_scaler
         self.model = best_model
+
+    def process_moddata_for_model(self, data: MODData, fit_scaler=False):
+
+        x = data.get_featurized_df()[self.optimal_descriptors[:self.n_feat]].values
+        if fit_scaler:
+            x = self._scaler.fit_transform(x)
+        elif self._scaler is not None:
+            x = self._scaler.transform(x)
+        x = np.nan_to_num(x)
+
+        return x
 
     def predict(self, test_data: MODData) -> pd.DataFrame:
         """Predict the target values for the passed MODData.
@@ -370,15 +378,7 @@ class MODNetModel:
 
         """
 
-        x = test_data.get_featurized_df()[
-            self.optimal_descriptors[:self.n_feat]
-        ].values
-
-        # Scale the input features:
-        if self._scaler is not None:
-            x = self._scaler.transform(x)
-
-        x = np.nan_to_num(x)
+        x = self.process_moddata_for_model(test_data)
 
         if self._multi_target:
             p = np.array(self.model.predict(x))[:, :, 0].transpose()
